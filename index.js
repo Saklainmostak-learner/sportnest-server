@@ -42,7 +42,10 @@ const client = new MongoClient(uri, {
 });
 
 const verifyToken = (req, res, next) => {
-  const token = req.cookies?.token;
+  const cookieToken = req.cookies?.token;
+  const headerToken = req.headers.authorization?.split(" ")[1];
+
+  const token = cookieToken || headerToken;
 
   if (!token) {
     return res.status(401).send({ message: "Unauthorized access" });
@@ -79,7 +82,7 @@ async function run() {
           secure: process.env.NODE_ENV === "production",
           sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
         })
-        .send({ success: true });
+        .send({ success: true,token });
     });
     app.post("/logout", async (req, res) => {
       res.clearCookie("token", {
