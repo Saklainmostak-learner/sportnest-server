@@ -17,7 +17,13 @@ const allowedOrigins = [
 
 app.use(
   cors({
-    origin: allowedOrigins,
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("CORS not allowed"));
+      }
+    },
     credentials: true,
   })
 );
@@ -72,199 +78,200 @@ async function run() {
           httpOnly: true,
           secure: process.env.NODE_ENV === "production",
           sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
-        });
+        })
+        .send({ success: true });
+    });
+    app.post("/logout", async (req, res) => {
+      res.clearCookie("token", {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
+      })
 
-      app.post("/logout", async (req, res) => {
-        res.clearCookie("token", {
-          httpOnly: true,
-          secure: process.env.NODE_ENV === "production",
-          sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
-        });
+        .send({ success: true });
+    });
 
-        res.send({ success: true });
+    // GET ALL FACILITIES
+    app.get("/facilities", async (req, res) => {
+      const search = req.query.search || "";
+      const type = req.query.type || "";
+
+      const query = {
+        name: {
+          $regex: search,
+          $options: "i",
+        },
+      };
+
+      if (type && type !== "All Sports") {
+        query.type = type;
+      }
+
+      const result = await facilitiesCollection.find(query).toArray();
+
+      res.send(result);
+    });
+
+    // GET SINGLE FACILITY
+    app.get("/facilities/:id", async (req, res) => {
+      const id = req.params.id;
+
+      const result = await facilitiesCollection.findOne({
+        _id: new ObjectId(id),
       });
 
-      // GET ALL FACILITIES
-      app.get("/facilities", async (req, res) => {
-        const search = req.query.search || "";
-        const type = req.query.type || "";
+      res.send(result);
+    });
 
-        const query = {
-          name: {
-            $regex: search,
-            $options: "i",
-          },
-        };
+    // ADD FACILITY
+    app.post("/facilities", verifyToken, async (req, res) => {
+      const facility = req.body;
 
-        if (type && type !== "All Sports") {
-          query.type = type;
-        }
+      const result = await facilitiesCollection.insertOne(facility);
 
-        const result = await facilitiesCollection.find(query).toArray();
+      res.send(result);
+    });
 
-        res.send(result);
-      });
+    // UPDATE FACILITY
+    app.patch("/facilities/:id", verifyToken, async (req, res) => {
+      const id = req.params.id;
 
-      // GET SINGLE FACILITY
-      app.get("/facilities/:id", async (req, res) => {
-        const id = req.params.id;
+      const updatedFacility = req.body;
 
-        const result = await facilitiesCollection.findOne({
+      const result = await facilitiesCollection.updateOne(
+        {
           _id: new ObjectId(id),
+        },
+        {
+          $set: updatedFacility,
+        }
+      );
+
+      res.send(result);
+    });
+
+    // DELETE FACILITY
+    app.delete("/facilities/:id", verifyToken, async (req, res) => {
+      const id = req.params.id;
+
+      const result = await facilitiesCollection.deleteOne({
+        _id: new ObjectId(id),
+      });
+
+      res.send(result);
+    });
+
+    // GET BOOKINGS
+    app.get("/bookings", verifyToken, async (req, res) => {
+      const email = req.query.email;
+
+      if (req.user.email !== email) {
+        return res.status(403).send({
+          message: "Forbidden access",
         });
+      }
 
-        res.send(result);
-      });
+      const result = await bookingsCollection
+        .find({
+          userEmail: email,
+        })
+        .toArray();
 
-      // ADD FACILITY
-      app.post("/facilities", verifyToken, async (req, res) => {
-        const facility = req.body;
+      res.send(result);
+    });
 
-        const result = await facilitiesCollection.insertOne(facility);
+    // CREATE BOOKING
+    app.post("/bookings", verifyToken, async (req, res) => {
+      const booking = req.body;
 
-        res.send(result);
-      });
+      booking.status = "pending";
 
-      // UPDATE FACILITY
-      app.patch("/facilities/:id", verifyToken, async (req, res) => {
-        const id = req.params.id;
+      const result = await bookingsCollection.insertOne(booking);
 
-        const updatedFacility = req.body;
+      res.send(result);
+    });
 
-        const result = await facilitiesCollection.updateOne(
-          {
-            _id: new ObjectId(id),
-          },
-          {
-            $set: updatedFacility,
-          }
-        );
+    // CANCEL BOOKING
+    app.patch("/bookings/:id/cancel", verifyToken, async (req, res) => {
+      const id = req.params.id;
 
-        res.send(result);
-      });
-
-      // DELETE FACILITY
-      app.delete("/facilities/:id", verifyToken, async (req, res) => {
-        const id = req.params.id;
-
-        const result = await facilitiesCollection.deleteOne({
+      const result = await bookingsCollection.updateOne(
+        {
           _id: new ObjectId(id),
-        });
-
-        res.send(result);
-      });
-
-      // GET BOOKINGS
-      app.get("/bookings", verifyToken, async (req, res) => {
-        const email = req.query.email;
-
-        if (req.user.email !== email) {
-          return res.status(403).send({
-            message: "Forbidden access",
-          });
-        }
-
-        const result = await bookingsCollection
-          .find({
-            userEmail: email,
-          })
-          .toArray();
-
-        res.send(result);
-      });
-
-      // CREATE BOOKING
-      app.post("/bookings", verifyToken, async (req, res) => {
-        const booking = req.body;
-
-        booking.status = "pending";
-
-        const result = await bookingsCollection.insertOne(booking);
-
-        res.send(result);
-      });
-
-      // CANCEL BOOKING
-      app.patch("/bookings/:id/cancel", verifyToken, async (req, res) => {
-        const id = req.params.id;
-
-        const result = await bookingsCollection.updateOne(
-          {
-            _id: new ObjectId(id),
+        },
+        {
+          $set: {
+            status: "cancelled",
           },
-          {
-            $set: {
-              status: "cancelled",
-            },
-          }
-        );
-
-        res.send(result);
-      });
-
-      // DASHBOARD STATS
-      app.get("/dashboard-stats", verifyToken, async (req, res) => {
-        const email = req.query.email;
-
-        if (req.user.email !== email) {
-          return res.status(403).send({
-            message: "Forbidden access",
-          });
         }
+      );
 
-        const myFacilities = await facilitiesCollection
-          .find({
-            ownerEmail: email,
-          })
-          .toArray();
+      res.send(result);
+    });
 
-        const facilityIds = myFacilities.map((facility) =>
-          facility._id.toString()
-        );
+    // DASHBOARD STATS
+    app.get("/dashboard-stats", verifyToken, async (req, res) => {
+      const email = req.query.email;
 
-        const myBookings = await bookingsCollection
-          .find({
-            userEmail: email,
-          })
-          .toArray();
-
-        const ownerBookings = await bookingsCollection
-          .find({
-            facilityId: {
-              $in: facilityIds,
-            },
-          })
-          .toArray();
-
-        const revenue = ownerBookings.reduce(
-          (sum, booking) => sum + Number(booking.totalPrice || 0),
-          0
-        );
-
-        res.send({
-          totalFacilities: myFacilities.length,
-          totalBookings: myBookings.length,
-          activeBookings: myBookings.filter(
-            (booking) => booking.status !== "cancelled"
-          ).length,
-          cancelledBookings: myBookings.filter(
-            (booking) => booking.status === "cancelled"
-          ).length,
-          ownerBookings: ownerBookings.length,
-          revenue,
+      if (req.user.email !== email) {
+        return res.status(403).send({
+          message: "Forbidden access",
         });
+      }
+
+      const myFacilities = await facilitiesCollection
+        .find({
+          ownerEmail: email,
+        })
+        .toArray();
+
+      const facilityIds = myFacilities.map((facility) =>
+        facility._id.toString()
+      );
+
+      const myBookings = await bookingsCollection
+        .find({
+          userEmail: email,
+        })
+        .toArray();
+
+      const ownerBookings = await bookingsCollection
+        .find({
+          facilityId: {
+            $in: facilityIds,
+          },
+        })
+        .toArray();
+
+      const revenue = ownerBookings.reduce(
+        (sum, booking) => sum + Number(booking.totalPrice || 0),
+        0
+      );
+
+      res.send({
+        totalFacilities: myFacilities.length,
+        totalBookings: myBookings.length,
+        activeBookings: myBookings.filter(
+          (booking) => booking.status !== "cancelled"
+        ).length,
+        cancelledBookings: myBookings.filter(
+          (booking) => booking.status === "cancelled"
+        ).length,
+        ownerBookings: ownerBookings.length,
+        revenue,
       });
-      console.log("SportNest MongoDB Connected");
-    } finally {
-    }
+    });
+    console.log("SportNest MongoDB Connected");
+  } finally {
   }
+}
 
 run().catch(console.dir);
 
-  app.get("/", (req, res) => {
-    res.send("SportNest Server Running");
-  });
+app.get("/", (req, res) => {
+  res.send("SportNest Server Running");
+});
 
-  app.listen(port, () => {
-    console.log(`SportNest running on port ${port}`);
-  });
+app.listen(port, () => {
+  console.log(`SportNest running on port ${port}`);
+});
