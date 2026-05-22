@@ -198,6 +198,58 @@ async function run() {
       res.send(result);
     });
 
+    // DASHBOARD STATS
+    app.get("/dashboard-stats", verifyToken, async (req, res) => {
+      const email = req.query.email;
+
+      if (req.user.email !== email) {
+        return res.status(403).send({
+          message: "Forbidden access",
+        });
+      }
+
+      const myFacilities = await facilitiesCollection
+        .find({
+          ownerEmail: email,
+        })
+        .toArray();
+
+      const facilityIds = myFacilities.map((facility) =>
+        facility._id.toString()
+      );
+
+      const myBookings = await bookingsCollection
+        .find({
+          userEmail: email,
+        })
+        .toArray();
+
+      const ownerBookings = await bookingsCollection
+        .find({
+          facilityId: {
+            $in: facilityIds,
+          },
+        })
+        .toArray();
+
+      const revenue = ownerBookings.reduce(
+        (sum, booking) => sum + Number(booking.totalPrice || 0),
+        0
+      );
+
+      res.send({
+        totalFacilities: myFacilities.length,
+        totalBookings: myBookings.length,
+        activeBookings: myBookings.filter(
+          (booking) => booking.status !== "cancelled"
+        ).length,
+        cancelledBookings: myBookings.filter(
+          (booking) => booking.status === "cancelled"
+        ).length,
+        ownerBookings: ownerBookings.length,
+        revenue,
+      });
+    });
     console.log("SportNest MongoDB Connected");
   } finally {
   }
