@@ -1,31 +1,35 @@
 import { betterAuth } from "better-auth";
 import { mongodbAdapter } from "better-auth/adapters/mongodb";
-import { db, mongoClient } from "../config/database.js";
+
+import {
+  db,
+  mongoClient,
+} from "../config/database.js";
 
 export const auth = betterAuth({
-    database: mongodbAdapter(db, {
-        client: mongoClient,
-    }),
+  database: mongodbAdapter(db, {
+    client: mongoClient,
+  }),
 
-    baseURL: process.env.BETTER_AUTH_URL,
+  secret: process.env.BETTER_AUTH_SECRET,
 
-    trustedOrigins: [
-        "http://localhost:5173",
-        "https://sportnest-client-seven.vercel.app",
-    ],
+  baseURL: process.env.BETTER_AUTH_URL,
 
-    emailAndPassword: {
-        enabled: true,
+  trustedOrigins: [
+    "http://localhost:5173",
+    "https://sportnest-client-seven.vercel.app",
+  ],
 
-        // Assignment says minimum 6 characters
-        minPasswordLength: 6,
-        autoSignIn: false,
+  emailAndPassword: {
+    enabled: true,
+    minPasswordLength: 6,
+    autoSignIn: false,
+  },
+
+  socialProviders: {
+    google: {
+      clientId: process.env.GOOGLE_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
     },
-
-    socialProviders: {
-        google: {
-            clientId: process.env.GOOGLE_CLIENT_ID,
-            clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-        },
-    },
+  },
 });
