@@ -198,26 +198,106 @@ app.get("/facilities/:id", async (req, res) => {
 */
 app.post("/facilities", verifyToken, async (req, res) => {
   try {
-    const facility = {
-      ...req.body,
+    const {
+      name,
+      type,
+      image,
+      location,
+      pricePerHour,
+      capacity,
+      availableSlots,
+      description,
+    } = req.body;
 
-      // frontend owner email 
+    if (
+      !name ||
+      !type ||
+      !image ||
+      !location ||
+      !pricePerHour ||
+      !capacity ||
+      !availableSlots ||
+      !description
+    ) {
+      return res.status(400).send({
+        message: "All facility fields are required",
+      });
+    }
+
+    const facility = {
+      name: name.trim(),
+      type,
+      image: image.trim(),
+      location: location.trim(),
+
+      pricePerHour: Number(pricePerHour),
+      capacity: Number(capacity),
+
+      availableSlots: Array.isArray(availableSlots)
+        ? availableSlots
+        : [],
+
+      description: description.trim(),
+
+      // Client থেকে ownerEmail নিচ্ছি না
       ownerEmail: req.user.email,
 
       bookingCount: 0,
       createdAt: new Date(),
     };
 
+    if (facility.pricePerHour <= 0) {
+      return res.status(400).send({
+        message: "Price per hour must be greater than 0",
+      });
+    }
+
+    if (facility.capacity <= 0) {
+      return res.status(400).send({
+        message: "Capacity must be greater than 0",
+      });
+    }
+
+    if (facility.availableSlots.length === 0) {
+      return res.status(400).send({
+        message: "At least one available time slot is required",
+      });
+    }
+
     const result = await facilitiesCollection.insertOne(facility);
 
-    res.send(result);
+    res.status(201).send({
+      success: true,
+      message: "Facility added successfully",
+      insertedId: result.insertedId,
+    });
   } catch (error) {
+    console.error("Add facility error:", error);
+
     res.status(500).send({
       message: "Failed to add facility",
     });
   }
 });
+/**MY FACILITIES */
 
+app.get("/my-facilities", verifyToken, async (req, res) => {
+  try {
+    const facilities = await facilitiesCollection
+      .find({
+        ownerEmail: req.user.email,
+      })
+      .toArray();
+
+    res.send(facilities);
+  } catch (error) {
+    console.error("My facilities error:", error);
+
+    res.status(500).send({
+      message: "Failed to load your facilities",
+    });
+  }
+});
 /*
   UPDATE FACILITY
 */
@@ -248,6 +328,8 @@ app.patch("/facilities/:id", verifyToken, async (req, res) => {
     // owner 
     delete updatedFacility.ownerEmail;
     delete updatedFacility._id;
+    delete updatedFacility.bookingCount;
+    delete updatedFacility.createdAt;
 
     const result = await facilitiesCollection.updateOne(
       {
