@@ -8,20 +8,29 @@ import { ObjectId } from "mongodb";
 import { toNodeHandler } from "better-auth/node";
 
 import { auth } from "./auth/auth.js";
+
 import {
   facilitiesCollection,
   bookingsCollection,
+  connectToDatabase,
 } from "./config/database.js";
 
 const app = express();
+
 const port = process.env.PORT || 5000;
 
+/**
+ * Allowed Client Origins
+ */
 const allowedOrigins = [
   "http://localhost:5173",
   "https://sportnest-client-seven.vercel.app",
   "https://sportnest-client-git-main-saklainmostak-learners-projects.vercel.app",
 ];
 
+/**
+ * CORS
+ */
 app.use(
   cors({
     origin: (origin, callback) => {
@@ -31,25 +40,30 @@ app.use(
         callback(new Error("CORS not allowed"));
       }
     },
+
     credentials: true,
-  })
+  }),
 );
 
-/*
-  Better Auth route
-   express.json() 
-*/
+/**
+ * Better Auth route
+ *
+ * Important:
+ * Better Auth handler must stay before express.json()
+ */
 app.all("/api/auth/*splat", toNodeHandler(auth));
 
 app.use(express.json());
 app.use(cookieParser());
 
-/*
-  JWT middleware
-*/
+/**
+ * JWT Middleware
+ */
 const verifyToken = (req, res, next) => {
   const cookieToken = req.cookies?.token;
-  const headerToken = req.headers.authorization?.split(" ")[1];
+
+  const headerToken =
+    req.headers.authorization?.split(" ")[1];
 
   const token = cookieToken || headerToken;
 
@@ -59,22 +73,28 @@ const verifyToken = (req, res, next) => {
     });
   }
 
-  jwt.verify(token, process.env.JWT_SECRET, (error, decoded) => {
-    if (error) {
-      return res.status(403).send({
-        message: "Forbidden access",
-      });
-    }
+  jwt.verify(
+    token,
+    process.env.JWT_SECRET,
+    (error, decoded) => {
+      if (error) {
+        return res.status(403).send({
+          message: "Forbidden access",
+        });
+      }
 
-    req.user = decoded;
-    next();
-  });
+      req.user = decoded;
+
+      next();
+    },
+  );
 };
 
-/*
-  JWT
-  Better Auth session verify JWT 
-*/
+/**
+ * CREATE JWT
+ *
+ * Better Auth session -> JWT HTTPOnly Cookie
+ */
 app.post("/jwt", async (req, res) => {
   try {
     const session = await auth.api.getSession({
@@ -95,15 +115,20 @@ app.post("/jwt", async (req, res) => {
       process.env.JWT_SECRET,
       {
         expiresIn: "7d",
-      }
+      },
     );
 
     res
       .cookie("token", token, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
+
+        secure:
+          process.env.NODE_ENV === "production",
+
         sameSite:
-          process.env.NODE_ENV === "production" ? "none" : "lax",
+          process.env.NODE_ENV === "production"
+            ? "none"
+            : "lax",
       })
       .send({
         success: true,
@@ -117,25 +142,36 @@ app.post("/jwt", async (req, res) => {
   }
 });
 
-/*
-  Logout JWT cookie
-*/
+/**
+ * LOGOUT JWT COOKIE
+ */
 app.post("/logout", (req, res) => {
   res
     .clearCookie("token", {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
+
+      secure:
+        process.env.NODE_ENV === "production",
+
       sameSite:
-        process.env.NODE_ENV === "production" ? "none" : "lax",
+        process.env.NODE_ENV === "production"
+          ? "none"
+          : "lax",
     })
     .send({
       success: true,
     });
 });
 
-/*
-  GET ALL FACILITIES
-*/
+/**
+ * GET ALL FACILITIES
+ *
+ * Search:
+ * MongoDB $regex
+ *
+ * Filter:
+ * MongoDB $in
+ */
 app.get("/facilities", async (req, res) => {
   try {
     const search = req.query.search || "";
@@ -164,20 +200,24 @@ app.get("/facilities", async (req, res) => {
 
     res.send(facilities);
   } catch (error) {
+    console.error("GET facilities error:", error);
+
     res.status(500).send({
       message: "Failed to load facilities",
+      error: error.message,
     });
   }
 });
 
-/*
-  GET SINGLE FACILITY
-*/
+/**
+ * GET SINGLE FACILITY
+ */
 app.get("/facilities/:id", async (req, res) => {
   try {
-    const facility = await facilitiesCollection.findOne({
-      _id: new ObjectId(req.params.id),
-    });
+    const facility =
+      await facilitiesCollection.findOne({
+        _id: new ObjectId(req.params.id),
+      });
 
     if (!facility) {
       return res.status(404).send({
@@ -187,388 +227,658 @@ app.get("/facilities/:id", async (req, res) => {
 
     res.send(facility);
   } catch (error) {
+    console.error(
+      "Get single facility error:",
+      error,
+    );
+
     res.status(500).send({
       message: "Failed to load facility",
+      error: error.message,
     });
   }
 });
 
-/*
-  ADD FACILITY
-*/
-app.post("/facilities", verifyToken, async (req, res) => {
-  try {
-    const {
-      name,
-      type,
-      image,
-      location,
-      pricePerHour,
-      capacity,
-      availableSlots,
-      description,
-    } = req.body;
+/**
+ * ADD FACILITY
+ */
+app.post(
+  "/facilities",
+  verifyToken,
+  async (req, res) => {
+    try {
+      const {
+        name,
+        type,
+        image,
+        location,
+        pricePerHour,
+        capacity,
+        availableSlots,
+        description,
+      } = req.body;
 
-    if (
-      !name ||
-      !type ||
-      !image ||
-      !location ||
-      !pricePerHour ||
-      !capacity ||
-      !availableSlots ||
-      !description
-    ) {
-      return res.status(400).send({
-        message: "All facility fields are required",
-      });
-    }
-
-    const facility = {
-      name: name.trim(),
-      type,
-      image: image.trim(),
-      location: location.trim(),
-
-      pricePerHour: Number(pricePerHour),
-      capacity: Number(capacity),
-
-      availableSlots: Array.isArray(availableSlots)
-        ? availableSlots
-        : [],
-
-      description: description.trim(),
-
-      // Client থেকে ownerEmail নিচ্ছি না
-      ownerEmail: req.user.email,
-
-      bookingCount: 0,
-      createdAt: new Date(),
-    };
-
-    if (facility.pricePerHour <= 0) {
-      return res.status(400).send({
-        message: "Price per hour must be greater than 0",
-      });
-    }
-
-    if (facility.capacity <= 0) {
-      return res.status(400).send({
-        message: "Capacity must be greater than 0",
-      });
-    }
-
-    if (facility.availableSlots.length === 0) {
-      return res.status(400).send({
-        message: "At least one available time slot is required",
-      });
-    }
-
-    const result = await facilitiesCollection.insertOne(facility);
-
-    res.status(201).send({
-      success: true,
-      message: "Facility added successfully",
-      insertedId: result.insertedId,
-    });
-  } catch (error) {
-    console.error("Add facility error:", error);
-
-    res.status(500).send({
-      message: "Failed to add facility",
-    });
-  }
-});
-/**MY FACILITIES */
-
-app.get("/my-facilities", verifyToken, async (req, res) => {
-  try {
-    const facilities = await facilitiesCollection
-      .find({
-        ownerEmail: req.user.email,
-      })
-      .toArray();
-
-    res.send(facilities);
-  } catch (error) {
-    console.error("My facilities error:", error);
-
-    res.status(500).send({
-      message: "Failed to load your facilities",
-    });
-  }
-});
-/*
-  UPDATE FACILITY
-*/
-app.patch("/facilities/:id", verifyToken, async (req, res) => {
-  try {
-    const id = req.params.id;
-
-    const facility = await facilitiesCollection.findOne({
-      _id: new ObjectId(id),
-    });
-
-    if (!facility) {
-      return res.status(404).send({
-        message: "Facility not found",
-      });
-    }
-
-    if (facility.ownerEmail !== req.user.email) {
-      return res.status(403).send({
-        message: "You can only update your own facility",
-      });
-    }
-
-    const updatedFacility = {
-      ...req.body,
-    };
-
-    // owner 
-    delete updatedFacility.ownerEmail;
-    delete updatedFacility._id;
-    delete updatedFacility.bookingCount;
-    delete updatedFacility.createdAt;
-
-    const result = await facilitiesCollection.updateOne(
-      {
-        _id: new ObjectId(id),
-      },
-      {
-        $set: updatedFacility,
+      if (
+        !name ||
+        !type ||
+        !image ||
+        !location ||
+        !pricePerHour ||
+        !capacity ||
+        !availableSlots ||
+        !description
+      ) {
+        return res.status(400).send({
+          message:
+            "All facility fields are required",
+        });
       }
-    );
 
-    res.send(result);
-  } catch (error) {
-    res.status(500).send({
-      message: "Failed to update facility",
-    });
-  }
-});
+      const facility = {
+        name: name.trim(),
 
-/*
-  DELETE FACILITY
-*/
-app.delete("/facilities/:id", verifyToken, async (req, res) => {
-  try {
-    const facility = await facilitiesCollection.findOne({
-      _id: new ObjectId(req.params.id),
-    });
+        type,
 
-    if (!facility) {
-      return res.status(404).send({
-        message: "Facility not found",
+        image: image.trim(),
+
+        location: location.trim(),
+
+        pricePerHour:
+          Number(pricePerHour),
+
+        capacity:
+          Number(capacity),
+
+        availableSlots:
+          Array.isArray(availableSlots)
+            ? availableSlots
+            : [],
+
+        description:
+          description.trim(),
+
+        // Owner email 
+        ownerEmail:
+          req.user.email,
+
+        bookingCount: 0,
+
+        createdAt:
+          new Date(),
+      };
+
+      if (
+        facility.pricePerHour <= 0
+      ) {
+        return res.status(400).send({
+          message:
+            "Price per hour must be greater than 0",
+        });
+      }
+
+      if (
+        facility.capacity <= 0
+      ) {
+        return res.status(400).send({
+          message:
+            "Capacity must be greater than 0",
+        });
+      }
+
+      if (
+        facility.availableSlots.length === 0
+      ) {
+        return res.status(400).send({
+          message:
+            "At least one available time slot is required",
+        });
+      }
+
+      const result =
+        await facilitiesCollection.insertOne(
+          facility,
+        );
+
+      res.status(201).send({
+        success: true,
+
+        message:
+          "Facility added successfully",
+
+        insertedId:
+          result.insertedId,
+      });
+    } catch (error) {
+      console.error(
+        "Add facility error:",
+        error,
+      );
+
+      res.status(500).send({
+        message:
+          "Failed to add facility",
+
+        error:
+          error.message,
       });
     }
+  },
+);
 
-    if (facility.ownerEmail !== req.user.email) {
-      return res.status(403).send({
-        message: "You can only delete your own facility",
+/**
+ * GET MY FACILITIES
+ */
+app.get(
+  "/my-facilities",
+  verifyToken,
+  async (req, res) => {
+    try {
+      const facilities =
+        await facilitiesCollection
+          .find({
+            ownerEmail:
+              req.user.email,
+          })
+          .toArray();
+
+      res.send(facilities);
+    } catch (error) {
+      console.error(
+        "My facilities error:",
+        error,
+      );
+
+      res.status(500).send({
+        message:
+          "Failed to load your facilities",
+
+        error:
+          error.message,
       });
     }
+  },
+);
 
-    const result = await facilitiesCollection.deleteOne({
-      _id: facility._id,
-    });
+/**
+ * UPDATE FACILITY
+ */
+app.patch(
+  "/facilities/:id",
+  verifyToken,
+  async (req, res) => {
+    try {
+      const id =
+        req.params.id;
 
-    res.send(result);
-  } catch (error) {
-    res.status(500).send({
-      message: "Failed to delete facility",
-    });
-  }
-});
+      const facility =
+        await facilitiesCollection.findOne({
+          _id:
+            new ObjectId(id),
+        });
 
-/*
-  GET MY BOOKINGS
-*/
-app.get("/bookings", verifyToken, async (req, res) => {
-  try {
-    const bookings = await bookingsCollection
-      .find({
-        userEmail: req.user.email,
-      })
-      .toArray();
+      if (!facility) {
+        return res.status(404).send({
+          message:
+            "Facility not found",
+        });
+      }
 
-    res.send(bookings);
-  } catch (error) {
-    res.status(500).send({
-      message: "Failed to load bookings",
-    });
-  }
-});
+      if (
+        facility.ownerEmail !==
+        req.user.email
+      ) {
+        return res.status(403).send({
+          message:
+            "You can only update your own facility",
+        });
+      }
 
-/*
-  CREATE BOOKING
-*/
-app.post("/bookings", verifyToken, async (req, res) => {
-  try {
-    const bookingData = req.body;
+      const updatedFacility = {
+        ...req.body,
+      };
 
-    const facility = await facilitiesCollection.findOne({
-      _id: new ObjectId(bookingData.facilityId),
-    });
+      /**
+       * Protected fields
+       *
+       */
+      delete updatedFacility.ownerEmail;
+      delete updatedFacility._id;
+      delete updatedFacility.bookingCount;
+      delete updatedFacility.createdAt;
 
-    if (!facility) {
-      return res.status(404).send({
-        message: "Facility not found",
+      const result =
+        await facilitiesCollection.updateOne(
+          {
+            _id:
+              new ObjectId(id),
+          },
+          {
+            $set:
+              updatedFacility,
+          },
+        );
+
+      res.send(result);
+    } catch (error) {
+      console.error(
+        "Update facility error:",
+        error,
+      );
+
+      res.status(500).send({
+        message:
+          "Failed to update facility",
+
+        error:
+          error.message,
       });
     }
+  },
+);
 
-    const hours = Number(bookingData.hours);
+/**
+ * DELETE FACILITY
+ */
+app.delete(
+  "/facilities/:id",
+  verifyToken,
+  async (req, res) => {
+    try {
+      const facility =
+        await facilitiesCollection.findOne({
+          _id:
+            new ObjectId(
+              req.params.id,
+            ),
+        });
 
-    if (!hours || hours < 1) {
-      return res.status(400).send({
-        message: "Booking hours must be at least 1",
+      if (!facility) {
+        return res.status(404).send({
+          message:
+            "Facility not found",
+        });
+      }
+
+      if (
+        facility.ownerEmail !==
+        req.user.email
+      ) {
+        return res.status(403).send({
+          message:
+            "You can only delete your own facility",
+        });
+      }
+
+      const result =
+        await facilitiesCollection.deleteOne(
+          {
+            _id:
+              facility._id,
+          },
+        );
+
+      res.send(result);
+    } catch (error) {
+      console.error(
+        "Delete facility error:",
+        error,
+      );
+
+      res.status(500).send({
+        message:
+          "Failed to delete facility",
+
+        error:
+          error.message,
       });
     }
+  },
+);
 
-    const totalPrice =
-      Number(facility.pricePerHour) * hours;
+/**
+ * GET MY BOOKINGS
+ */
+app.get(
+  "/bookings",
+  verifyToken,
+  async (req, res) => {
+    try {
+      const bookings =
+        await bookingsCollection
+          .find({
+            userEmail:
+              req.user.email,
+          })
+          .toArray();
 
-    const booking = {
-      facilityId: facility._id.toString(),
-      facilityName: facility.name,
+      res.send(bookings);
+    } catch (error) {
+      console.error(
+        "Get bookings error:",
+        error,
+      );
 
-      userEmail: req.user.email,
+      res.status(500).send({
+        message:
+          "Failed to load bookings",
 
-      bookingDate: bookingData.bookingDate,
-      timeSlot: bookingData.timeSlot,
+        error:
+          error.message,
+      });
+    }
+  },
+);
 
-      hours,
-      totalPrice,
+/**
+ * CREATE BOOKING
+ */
+app.post(
+  "/bookings",
+  verifyToken,
+  async (req, res) => {
+    try {
+      const bookingData =
+        req.body;
 
-      status: "pending",
-      createdAt: new Date(),
-    };
+      const facility =
+        await facilitiesCollection.findOne({
+          _id:
+            new ObjectId(
+              bookingData.facilityId,
+            ),
+        });
 
-    const result = await bookingsCollection.insertOne(booking);
+      if (!facility) {
+        return res.status(404).send({
+          message:
+            "Facility not found",
+        });
+      }
 
-    await facilitiesCollection.updateOne(
-      {
-        _id: facility._id,
-      },
-      {
-        $inc: {
-          bookingCount: 1,
+      const hours =
+        Number(
+          bookingData.hours,
+        );
+
+      if (
+        !hours ||
+        hours < 1
+      ) {
+        return res.status(400).send({
+          message:
+            "Booking hours must be at least 1",
+        });
+      }
+
+      const totalPrice =
+        Number(
+          facility.pricePerHour,
+        ) * hours;
+
+      const booking = {
+        facilityId:
+          facility._id.toString(),
+
+        facilityName:
+          facility.name,
+
+        userEmail:
+          req.user.email,
+
+        bookingDate:
+          bookingData.bookingDate,
+
+        timeSlot:
+          bookingData.timeSlot,
+
+        hours,
+
+        totalPrice,
+
+        status:
+          "pending",
+
+        createdAt:
+          new Date(),
+      };
+
+      const result =
+        await bookingsCollection.insertOne(
+          booking,
+        );
+
+      await facilitiesCollection.updateOne(
+        {
+          _id:
+            facility._id,
         },
-      }
-    );
+        {
+          $inc: {
+            bookingCount: 1,
+          },
+        },
+      );
 
-    res.send(result);
-  } catch (error) {
-    console.error(error);
+      res.status(201).send({
+        success: true,
 
-    res.status(500).send({
-      message: "Failed to create booking",
-    });
-  }
-});
+        message:
+          "Booking created successfully",
 
-/*
-  CANCEL BOOKING
-*/
+        insertedId:
+          result.insertedId,
+      });
+    } catch (error) {
+      console.error(
+        "Create booking error:",
+        error,
+      );
+
+      res.status(500).send({
+        message:
+          "Failed to create booking",
+
+        error:
+          error.message,
+      });
+    }
+  },
+);
+
+/**
+ * CANCEL BOOKING
+ */
 app.patch(
   "/bookings/:id/cancel",
   verifyToken,
   async (req, res) => {
     try {
-      const result = await bookingsCollection.updateOne(
-        {
-          _id: new ObjectId(req.params.id),
+      const result =
+        await bookingsCollection.updateOne(
+          {
+            _id:
+              new ObjectId(
+                req.params.id,
+              ),
 
-          //  user booking cancel 
-          userEmail: req.user.email,
-        },
-        {
-          $set: {
-            status: "cancelled",
+            userEmail:
+              req.user.email,
           },
-        }
-      );
+          {
+            $set: {
+              status:
+                "cancelled",
+            },
+          },
+        );
 
-      if (!result.matchedCount) {
+      if (
+        !result.matchedCount
+      ) {
         return res.status(404).send({
-          message: "Booking not found",
+          message:
+            "Booking not found",
         });
       }
 
-      res.send(result);
-    } catch (error) {
-      res.status(500).send({
-        message: "Failed to cancel booking",
+      res.send({
+        success: true,
+
+        message:
+          "Booking cancelled successfully",
       });
-    }
-  }
-);
-
-/*
-  DASHBOARD STATS
-*/
-app.get("/dashboard-stats", verifyToken, async (req, res) => {
-  try {
-    const email = req.user.email;
-
-    const myFacilities = await facilitiesCollection
-      .find({
-        ownerEmail: email,
-      })
-      .toArray();
-
-    const facilityIds = myFacilities.map((facility) =>
-      facility._id.toString()
-    );
-
-    const myBookings = await bookingsCollection
-      .find({
-        userEmail: email,
-      })
-      .toArray();
-
-    const ownerBookings = await bookingsCollection
-      .find({
-        facilityId: {
-          $in: facilityIds,
-        },
-      })
-      .toArray();
-
-    const revenue = ownerBookings
-      .filter((booking) => booking.status !== "cancelled")
-      .reduce(
-        (sum, booking) =>
-          sum + Number(booking.totalPrice || 0),
-        0
+    } catch (error) {
+      console.error(
+        "Cancel booking error:",
+        error,
       );
 
-    res.send({
-      totalFacilities: myFacilities.length,
-      totalBookings: myBookings.length,
+      res.status(500).send({
+        message:
+          "Failed to cancel booking",
 
-      activeBookings: myBookings.filter(
-        (booking) => booking.status !== "cancelled"
-      ).length,
+        error:
+          error.message,
+      });
+    }
+  },
+);
 
-      cancelledBookings: myBookings.filter(
-        (booking) => booking.status === "cancelled"
-      ).length,
+/**
+ * DASHBOARD STATS
+ */
+app.get(
+  "/dashboard-stats",
+  verifyToken,
+  async (req, res) => {
+    try {
+      const email =
+        req.user.email;
 
-      ownerBookings: ownerBookings.length,
-      revenue,
+      const myFacilities =
+        await facilitiesCollection
+          .find({
+            ownerEmail:
+              email,
+          })
+          .toArray();
+
+      const facilityIds =
+        myFacilities.map(
+          (facility) =>
+            facility._id.toString(),
+        );
+
+      const myBookings =
+        await bookingsCollection
+          .find({
+            userEmail:
+              email,
+          })
+          .toArray();
+
+      const ownerBookings =
+        facilityIds.length > 0
+          ? await bookingsCollection
+              .find({
+                facilityId: {
+                  $in:
+                    facilityIds,
+                },
+              })
+              .toArray()
+          : [];
+
+      const revenue =
+        ownerBookings
+          .filter(
+            (booking) =>
+              booking.status !==
+              "cancelled",
+          )
+          .reduce(
+            (
+              sum,
+              booking,
+            ) =>
+              sum +
+              Number(
+                booking.totalPrice ||
+                  0,
+              ),
+            0,
+          );
+
+      res.send({
+        totalFacilities:
+          myFacilities.length,
+
+        totalBookings:
+          myBookings.length,
+
+        activeBookings:
+          myBookings.filter(
+            (booking) =>
+              booking.status !==
+              "cancelled",
+          ).length,
+
+        cancelledBookings:
+          myBookings.filter(
+            (booking) =>
+              booking.status ===
+              "cancelled",
+          ).length,
+
+        ownerBookings:
+          ownerBookings.length,
+
+        revenue,
+      });
+    } catch (error) {
+      console.error(
+        "Dashboard stats error:",
+        error,
+      );
+
+      res.status(500).send({
+        message:
+          "Failed to load dashboard statistics",
+
+        error:
+          error.message,
+      });
+    }
+  },
+);
+
+/**
+ * SERVER HEALTH CHECK
+ */
+app.get("/", (req, res) => {
+  res.send(
+    "SportNest Server Running",
+  );
+});
+
+/**
+ * START SERVER
+ */
+const startServer = async () => {
+  try {
+    await connectToDatabase();
+
+    app.listen(port, () => {
+      console.log(`SportNest running on port ${port}`);
     });
   } catch (error) {
-    res.status(500).send({
-      message: "Failed to load dashboard statistics",
-    });
+    console.error(
+      "Server failed to start:",
+      error.message,
+    );
+
+    process.exit(1);
   }
-});
+};
 
-app.get("/", (req, res) => {
-  res.send("SportNest Server Running");
-});
-
-app.listen(port, () => {
-  console.log(`SportNest running on port ${port}`);
-});
+startServer();
