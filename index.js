@@ -2,8 +2,6 @@ import "dotenv/config";
 
 import express from "express";
 import cors from "cors";
-import cookieParser from "cookie-parser";
-import jwt from "jsonwebtoken";
 import { ObjectId } from "mongodb";
 import {
   fromNodeHeaders,
@@ -20,26 +18,27 @@ import {
 const app = express();
 const port = process.env.PORT || 5000;
 
+/* =========================
+   ALLOWED ORIGINS
+========================= */
+
 const allowedOrigins = [
   "http://localhost:5173",
   "https://sportnest-client-seven.vercel.app",
   "https://sportnest-client-git-main-saklainmostak-learners-projects.vercel.app",
 ];
 
+/* =========================
+   CORS
+========================= */
+
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (
-        !origin ||
-        allowedOrigins.includes(origin)
-      ) {
+      if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
-        callback(
-          new Error(
-            "CORS not allowed",
-          ),
-        );
+        callback(new Error("CORS not allowed"));
       }
     },
 
@@ -51,84 +50,34 @@ app.use(
   }),
 );
 
-// Better Auth handler must be registered before express.json().
-app.all("/api/auth/*splat", toNodeHandler(auth));
+/* =========================
+   BETTER AUTH
+========================= */
+
+// Better Auth handler must be before express.json()
+app.all(
+  "/api/auth/*splat",
+  toNodeHandler(auth),
+);
 
 app.use(express.json());
-app.use(cookieParser());
 
-const verifyToken = (req, res, next) => {
-  const cookieToken = req.cookies?.token;
-  const headerToken = req.headers.authorization?.split(" ")[1];
+/* =========================
+   AUTH MIDDLEWARE
+========================= */
 
-  const token = cookieToken || headerToken;
-
-  if (!token) {
-    return res.status(401).send({
-      message: "Unauthorized access",
-    });
-  }
-
-  jwt.verify(
-    token,
-    process.env.JWT_SECRET,
-    (error, decoded) => {
-      if (error) {
-        return res.status(403).send({
-          message: "Forbidden access",
-        });
-      }
-
-      req.user = decoded;
-      next();
-    },
-  );
-};
-
-const isValidObjectId = (id) => ObjectId.isValid(id);
-
-const normalizeSlots = (slots) => {
-  if (Array.isArray(slots)) {
-    return slots
-      .map((slot) => String(slot).trim())
-      .filter(Boolean);
-  }
-
-  if (typeof slots === "string") {
-    return slots
-      .split(",")
-      .map((slot) => slot.trim())
-      .filter(Boolean);
-  }
-
-  return [];
-};
-
-const normalizeFacilityDocument = (facility) => {
-  if (!facility) return facility;
-
-  return {
-    ...facility,
-    pricePerHour: Number(
-      facility.pricePerHour ?? facility.price ?? 0,
-    ),
-    availableSlots: Array.isArray(
-      facility.availableSlots,
-    )
-      ? facility.availableSlots
-      : normalizeSlots(facility.slots),
-  };
-};
-
-// =======================
-// JWT
-// =======================
-
-app.post("/jwt", async (req, res) => {
+const verifyToken = async (
+  req,
+  res,
+  next,
+) => {
   try {
-    const session = await auth.api.getSession({
-      headers: fromNodeHeaders(req.headers),
-    });
+    const session =
+      await auth.api.getSession({
+        headers: fromNodeHeaders(
+          req.headers,
+        ),
+      });
 
     if (!session?.user) {
       return res.status(401).send({
@@ -136,130 +85,167 @@ app.post("/jwt", async (req, res) => {
       });
     }
 
-    const token = jwt.sign(
-      {
-        id: session.user.id,
-        email: session.user.email,
-      },
-      process.env.JWT_SECRET,
-      {
-        expiresIn: "7d",
-      },
-    );
+    req.user = {
+      id: session.user.id,
+      email: session.user.email,
+    };
 
-    res
-      .cookie("token", token, {
-        httpOnly: true,
-        secure:
-          process.env.NODE_ENV === "production",
-        sameSite:
-          process.env.NODE_ENV === "production"
-            ? "none"
-            : "lax",
-      })
-      .send({
-        success: true,
-      });
-  } catch (error) {
-    console.error("JWT error:", error);
-
-    res.status(500).send({
-      message: "Failed to create access token",
-      error: error.message,
-    });
-  }
-});
-
-// =======================
-// LOGOUT
-// =======================
-
-app.post("/logout", (req, res) => {
-  res
-    .clearCookie("token", {
-      httpOnly: true,
-      secure:
-        process.env.NODE_ENV === "production",
-      sameSite:
-        process.env.NODE_ENV === "production"
-          ? "none"
-          : "lax",
-    })
-    .send({
-      success: true,
-    });
-});
-
-// =======================
-// GET ALL FACILITIES
-// =======================
-
-app.get("/facilities", async (req, res) => {
-  try {
-    const search = String(
-      req.query.search || "",
-    ).trim();
-
-    const type = String(
-      req.query.type || "",
-    ).trim();
-
-    const query = {};
-
-    if (search) {
-      query.name = {
-        $regex: search,
-        $options: "i",
-      };
-    }
-
-    if (type && type !== "All Sports") {
-      const types = type
-        .split(",")
-        .map((item) => item.trim())
-        .filter(Boolean);
-
-      if (types.length > 0) {
-        query.type = {
-          $in: types,
-        };
-      }
-    }
-
-    const facilities =
-      await facilitiesCollection
-        .find(query)
-        .toArray();
-
-    res.send(
-      facilities.map(
-        normalizeFacilityDocument,
-      ),
-    );
+    next();
   } catch (error) {
     console.error(
-      "GET facilities error:",
+      "Auth verification error:",
       error,
     );
 
-    res.status(500).send({
-      message:
-        "Failed to load facilities",
-      error: error.message,
+    return res.status(401).send({
+      message: "Unauthorized access",
     });
   }
+};
+
+/* =========================
+   HELPERS
+========================= */
+
+const isValidObjectId = (id) =>
+  ObjectId.isValid(id);
+
+const normalizeSlots = (slots) => {
+  if (Array.isArray(slots)) {
+    return slots
+      .map((slot) =>
+        String(slot).trim(),
+      )
+      .filter(Boolean);
+  }
+
+  if (typeof slots === "string") {
+    return slots
+      .split(",")
+      .map((slot) =>
+        slot.trim(),
+      )
+      .filter(Boolean);
+  }
+
+  return [];
+};
+
+const normalizeFacilityDocument = (
+  facility,
+) => {
+  if (!facility) return facility;
+
+  return {
+    ...facility,
+
+    pricePerHour: Number(
+      facility.pricePerHour ??
+        facility.price ??
+        0,
+    ),
+
+    availableSlots:
+      Array.isArray(
+        facility.availableSlots,
+      )
+        ? facility.availableSlots
+        : normalizeSlots(
+            facility.slots,
+          ),
+  };
+};
+
+/* =========================
+   LOGOUT HELPER
+========================= */
+
+app.post("/logout", (req, res) => {
+  res.send({
+    success: true,
+  });
 });
 
-// =======================
-// GET SINGLE FACILITY
-// =======================
+/* =========================
+   GET ALL FACILITIES
+========================= */
+
+app.get(
+  "/facilities",
+  async (req, res) => {
+    try {
+      const search = String(
+        req.query.search || "",
+      ).trim();
+
+      const type = String(
+        req.query.type || "",
+      ).trim();
+
+      const query = {};
+
+      if (search) {
+        query.name = {
+          $regex: search,
+          $options: "i",
+        };
+      }
+
+      if (
+        type &&
+        type !== "All Sports"
+      ) {
+        const types = type
+          .split(",")
+          .map((item) =>
+            item.trim(),
+          )
+          .filter(Boolean);
+
+        if (types.length > 0) {
+          query.type = {
+            $in: types,
+          };
+        }
+      }
+
+      const facilities =
+        await facilitiesCollection
+          .find(query)
+          .toArray();
+
+      res.send(
+        facilities.map(
+          normalizeFacilityDocument,
+        ),
+      );
+    } catch (error) {
+      console.error(
+        "GET facilities error:",
+        error,
+      );
+
+      res.status(500).send({
+        message:
+          "Failed to load facilities",
+        error: error.message,
+      });
+    }
+  },
+);
+
+/* =========================
+   GET SINGLE FACILITY
+========================= */
 
 app.get(
   "/facilities/:id",
   async (req, res) => {
     try {
       if (
-        !isValidObjectId(req.params.id)
+        !isValidObjectId(
+          req.params.id,
+        )
       ) {
         return res.status(400).send({
           message:
@@ -303,9 +289,9 @@ app.get(
   },
 );
 
-// =======================
-// ADD FACILITY
-// =======================
+/* =========================
+   ADD FACILITY
+========================= */
 
 app.post(
   "/facilities",
@@ -323,17 +309,16 @@ app.post(
         description,
       } = req.body;
 
-      const slots = normalizeSlots(
-        availableSlots,
-      );
+      const slots =
+        normalizeSlots(
+          availableSlots,
+        );
 
-      const numericPrice = Number(
-        pricePerHour,
-      );
+      const numericPrice =
+        Number(pricePerHour);
 
-      const numericCapacity = Number(
-        capacity,
-      );
+      const numericCapacity =
+        Number(capacity);
 
       if (
         !name?.trim() ||
@@ -342,10 +327,12 @@ app.post(
         !location?.trim() ||
         !description?.trim()
       ) {
-        return res.status(400).send({
-          message:
-            "All facility fields are required",
-        });
+        return res
+          .status(400)
+          .send({
+            message:
+              "All facility fields are required",
+          });
       }
 
       if (
@@ -354,10 +341,12 @@ app.post(
         ) ||
         numericPrice <= 0
       ) {
-        return res.status(400).send({
-          message:
-            "Price per hour must be greater than 0",
-        });
+        return res
+          .status(400)
+          .send({
+            message:
+              "Price per hour must be greater than 0",
+          });
       }
 
       if (
@@ -366,36 +355,54 @@ app.post(
         ) ||
         numericCapacity <= 0
       ) {
-        return res.status(400).send({
-          message:
-            "Capacity must be greater than 0",
-        });
+        return res
+          .status(400)
+          .send({
+            message:
+              "Capacity must be greater than 0",
+          });
       }
 
-      if (slots.length === 0) {
-        return res.status(400).send({
-          message:
-            "At least one available time slot is required",
-        });
+      if (
+        slots.length === 0
+      ) {
+        return res
+          .status(400)
+          .send({
+            message:
+              "At least one available time slot is required",
+          });
       }
 
       const facility = {
         name: name.trim(),
         type,
         image: image.trim(),
-        location: location.trim(),
+        location:
+          location.trim(),
+
         pricePerHour:
           numericPrice,
+
         capacity:
           numericCapacity,
-        availableSlots: slots,
+
+        availableSlots:
+          slots,
+
         description:
           description.trim(),
+
         ownerEmail:
           req.user.email,
+
         bookingCount: 0,
-        createdAt: new Date(),
-        updatedAt: new Date(),
+
+        createdAt:
+          new Date(),
+
+        updatedAt:
+          new Date(),
       };
 
       const result =
@@ -405,8 +412,10 @@ app.post(
 
       res.status(201).send({
         success: true,
+
         message:
           "Facility added successfully",
+
         insertedId:
           result.insertedId,
       });
@@ -425,9 +434,9 @@ app.post(
   },
 );
 
-// =======================
-// MY FACILITIES
-// =======================
+/* =========================
+   MY FACILITIES
+========================= */
 
 app.get(
   "/my-facilities",
@@ -465,46 +474,56 @@ app.get(
   },
 );
 
-// =======================
-// UPDATE FACILITY
-// =======================
+/* =========================
+   UPDATE FACILITY
+========================= */
 
 app.patch(
   "/facilities/:id",
   verifyToken,
   async (req, res) => {
     try {
-      const id = req.params.id;
+      const id =
+        req.params.id;
 
-      if (!isValidObjectId(id)) {
-        return res.status(400).send({
-          message:
-            "Invalid facility id",
-        });
+      if (
+        !isValidObjectId(id)
+      ) {
+        return res
+          .status(400)
+          .send({
+            message:
+              "Invalid facility id",
+          });
       }
 
       const facility =
         await facilitiesCollection.findOne(
           {
-            _id: new ObjectId(id),
+            _id:
+              new ObjectId(id),
           },
         );
 
       if (!facility) {
-        return res.status(404).send({
-          message:
-            "Facility not found",
-        });
+        return res
+          .status(404)
+          .send({
+            message:
+              "Facility not found",
+          });
       }
 
       if (
         facility.ownerEmail !==
         req.user.email
       ) {
-        return res.status(403).send({
-          message:
-            "You can only update your own facility",
-        });
+        return res
+          .status(403)
+          .send({
+            message:
+              "You can only update your own facility",
+          });
       }
 
       const {
@@ -533,11 +552,13 @@ app.patch(
           location || "",
         ).trim(),
 
-        pricePerHour: Number(
-          pricePerHour,
-        ),
+        pricePerHour:
+          Number(
+            pricePerHour,
+          ),
 
-        capacity: Number(capacity),
+        capacity:
+          Number(capacity),
 
         availableSlots:
           normalizeSlots(
@@ -548,7 +569,8 @@ app.patch(
           description || "",
         ).trim(),
 
-        updatedAt: new Date(),
+        updatedAt:
+          new Date(),
       };
 
       if (
@@ -558,10 +580,12 @@ app.patch(
         !updatedFacility.location ||
         !updatedFacility.description
       ) {
-        return res.status(400).send({
-          message:
-            "All facility fields are required",
-        });
+        return res
+          .status(400)
+          .send({
+            message:
+              "All facility fields are required",
+          });
       }
 
       if (
@@ -571,38 +595,47 @@ app.patch(
         updatedFacility.pricePerHour <=
           0
       ) {
-        return res.status(400).send({
-          message:
-            "Price per hour must be greater than 0",
-        });
+        return res
+          .status(400)
+          .send({
+            message:
+              "Price per hour must be greater than 0",
+          });
       }
 
       if (
         !Number.isFinite(
           updatedFacility.capacity,
         ) ||
-        updatedFacility.capacity <= 0
+        updatedFacility.capacity <=
+          0
       ) {
-        return res.status(400).send({
-          message:
-            "Capacity must be greater than 0",
-        });
+        return res
+          .status(400)
+          .send({
+            message:
+              "Capacity must be greater than 0",
+          });
       }
 
       if (
         updatedFacility
-          .availableSlots.length === 0
+          .availableSlots
+          .length === 0
       ) {
-        return res.status(400).send({
-          message:
-            "At least one available time slot is required",
-        });
+        return res
+          .status(400)
+          .send({
+            message:
+              "At least one available time slot is required",
+          });
       }
 
       const result =
         await facilitiesCollection.updateOne(
           {
-            _id: new ObjectId(id),
+            _id:
+              new ObjectId(id),
           },
           {
             $set:
@@ -612,6 +645,7 @@ app.patch(
 
       res.send({
         success: true,
+
         modifiedCount:
           result.modifiedCount,
       });
@@ -630,9 +664,9 @@ app.patch(
   },
 );
 
-// =======================
-// DELETE FACILITY
-// =======================
+/* =========================
+   DELETE FACILITY
+========================= */
 
 app.delete(
   "/facilities/:id",
@@ -640,49 +674,60 @@ app.delete(
   async (req, res) => {
     try {
       if (
-        !isValidObjectId(req.params.id)
+        !isValidObjectId(
+          req.params.id,
+        )
       ) {
-        return res.status(400).send({
-          message:
-            "Invalid facility id",
-        });
+        return res
+          .status(400)
+          .send({
+            message:
+              "Invalid facility id",
+          });
       }
 
       const facility =
         await facilitiesCollection.findOne(
           {
-            _id: new ObjectId(
-              req.params.id,
-            ),
+            _id:
+              new ObjectId(
+                req.params.id,
+              ),
           },
         );
 
       if (!facility) {
-        return res.status(404).send({
-          message:
-            "Facility not found",
-        });
+        return res
+          .status(404)
+          .send({
+            message:
+              "Facility not found",
+          });
       }
 
       if (
         facility.ownerEmail !==
         req.user.email
       ) {
-        return res.status(403).send({
-          message:
-            "You can only delete your own facility",
-        });
+        return res
+          .status(403)
+          .send({
+            message:
+              "You can only delete your own facility",
+          });
       }
 
       const result =
         await facilitiesCollection.deleteOne(
           {
-            _id: facility._id,
+            _id:
+              facility._id,
           },
         );
 
       res.send({
         success: true,
+
         deletedCount:
           result.deletedCount,
       });
@@ -701,9 +746,9 @@ app.delete(
   },
 );
 
-// =======================
-// GET BOOKINGS
-// =======================
+/* =========================
+   GET BOOKINGS
+========================= */
 
 app.get(
   "/bookings",
@@ -737,9 +782,9 @@ app.get(
   },
 );
 
-// =======================
-// CREATE BOOKING
-// =======================
+/* =========================
+   CREATE BOOKING
+========================= */
 
 app.post(
   "/bookings",
@@ -755,28 +800,35 @@ app.post(
       } = req.body;
 
       if (
-        !isValidObjectId(facilityId)
+        !isValidObjectId(
+          facilityId,
+        )
       ) {
-        return res.status(400).send({
-          message:
-            "Invalid facility id",
-        });
+        return res
+          .status(400)
+          .send({
+            message:
+              "Invalid facility id",
+          });
       }
 
       const facility =
         await facilitiesCollection.findOne(
           {
-            _id: new ObjectId(
-              facilityId,
-            ),
+            _id:
+              new ObjectId(
+                facilityId,
+              ),
           },
         );
 
       if (!facility) {
-        return res.status(404).send({
-          message:
-            "Facility not found",
-        });
+        return res
+          .status(404)
+          .send({
+            message:
+              "Facility not found",
+          });
       }
 
       const normalizedFacility =
@@ -787,18 +839,21 @@ app.post(
       const numericHours =
         Number(hours);
 
-      const today = new Date()
-        .toISOString()
-        .split("T")[0];
+      const today =
+        new Date()
+          .toISOString()
+          .split("T")[0];
 
       if (
         !bookingDate ||
         bookingDate < today
       ) {
-        return res.status(400).send({
-          message:
-            "Please select a valid booking date",
-        });
+        return res
+          .status(400)
+          .send({
+            message:
+              "Please select a valid booking date",
+          });
       }
 
       if (
@@ -807,17 +862,21 @@ app.post(
           timeSlot,
         )
       ) {
-        return res.status(400).send({
-          message:
-            "Please select a valid available time slot",
-        });
+        return res
+          .status(400)
+          .send({
+            message:
+              "Please select a valid available time slot",
+          });
       }
 
       if (!bookingTime) {
-        return res.status(400).send({
-          message:
-            "Please select a preferred start time",
-        });
+        return res
+          .status(400)
+          .send({
+            message:
+              "Please select a preferred start time",
+          });
       }
 
       if (
@@ -826,10 +885,12 @@ app.post(
         ) ||
         numericHours < 1
       ) {
-        return res.status(400).send({
-          message:
-            "Booking hours must be at least 1",
-        });
+        return res
+          .status(400)
+          .send({
+            message:
+              "Booking hours must be at least 1",
+          });
       }
 
       if (
@@ -839,10 +900,12 @@ app.post(
         normalizedFacility.pricePerHour <=
           0
       ) {
-        return res.status(400).send({
-          message:
-            "Facility price is not configured correctly",
-        });
+        return res
+          .status(400)
+          .send({
+            message:
+              "Facility price is not configured correctly",
+          });
       }
 
       const duplicateBooking =
@@ -863,11 +926,15 @@ app.post(
           },
         );
 
-      if (duplicateBooking) {
-        return res.status(409).send({
-          message:
-            "You already have an active booking for this facility and time slot",
-        });
+      if (
+        duplicateBooking
+      ) {
+        return res
+          .status(409)
+          .send({
+            message:
+              "You already have an active booking for this facility and time slot",
+          });
       }
 
       const totalPrice =
@@ -897,7 +964,8 @@ app.post(
         timeSlot,
         bookingTime,
 
-        hours: numericHours,
+        hours:
+          numericHours,
 
         pricePerHour:
           normalizedFacility.pricePerHour,
@@ -906,7 +974,8 @@ app.post(
 
         status: "pending",
 
-        createdAt: new Date(),
+        createdAt:
+          new Date(),
       };
 
       const result =
@@ -928,8 +997,10 @@ app.post(
 
       res.status(201).send({
         success: true,
+
         message:
           "Booking created successfully",
+
         insertedId:
           result.insertedId,
       });
@@ -948,9 +1019,9 @@ app.post(
   },
 );
 
-// =======================
-// CANCEL BOOKING
-// =======================
+/* =========================
+   CANCEL BOOKING
+========================= */
 
 app.patch(
   "/bookings/:id/cancel",
@@ -958,20 +1029,25 @@ app.patch(
   async (req, res) => {
     try {
       if (
-        !isValidObjectId(req.params.id)
+        !isValidObjectId(
+          req.params.id,
+        )
       ) {
-        return res.status(400).send({
-          message:
-            "Invalid booking id",
-        });
+        return res
+          .status(400)
+          .send({
+            message:
+              "Invalid booking id",
+          });
       }
 
       const booking =
         await bookingsCollection.findOne(
           {
-            _id: new ObjectId(
-              req.params.id,
-            ),
+            _id:
+              new ObjectId(
+                req.params.id,
+              ),
 
             userEmail:
               req.user.email,
@@ -979,17 +1055,21 @@ app.patch(
         );
 
       if (!booking) {
-        return res.status(404).send({
-          message:
-            "Booking not found",
-        });
+        return res
+          .status(404)
+          .send({
+            message:
+              "Booking not found",
+          });
       }
 
       if (
-        booking.status === "cancelled"
+        booking.status ===
+        "cancelled"
       ) {
         return res.send({
           success: true,
+
           message:
             "Booking is already cancelled",
         });
@@ -997,12 +1077,16 @@ app.patch(
 
       await bookingsCollection.updateOne(
         {
-          _id: booking._id,
+          _id:
+            booking._id,
         },
         {
           $set: {
-            status: "cancelled",
-            cancelledAt: new Date(),
+            status:
+              "cancelled",
+
+            cancelledAt:
+              new Date(),
           },
         },
       );
@@ -1014,9 +1098,10 @@ app.patch(
       ) {
         await facilitiesCollection.updateOne(
           {
-            _id: new ObjectId(
-              booking.facilityId,
-            ),
+            _id:
+              new ObjectId(
+                booking.facilityId,
+              ),
 
             bookingCount: {
               $gt: 0,
@@ -1032,6 +1117,7 @@ app.patch(
 
       res.send({
         success: true,
+
         message:
           "Booking cancelled successfully",
       });
@@ -1050,9 +1136,9 @@ app.patch(
   },
 );
 
-// =======================
-// DASHBOARD STATS
-// =======================
+/* =========================
+   DASHBOARD STATS
+========================= */
 
 app.get(
   "/dashboard-stats",
@@ -1065,19 +1151,22 @@ app.get(
       const myFacilities =
         await facilitiesCollection
           .find({
-            ownerEmail: email,
+            ownerEmail:
+              email,
           })
           .toArray();
 
       const facilityIds =
-        myFacilities.map((facility) =>
-          facility._id.toString(),
+        myFacilities.map(
+          (facility) =>
+            facility._id.toString(),
         );
 
       const myBookings =
         await bookingsCollection
           .find({
-            userEmail: email,
+            userEmail:
+              email,
           })
           .toArray();
 
@@ -1086,7 +1175,8 @@ app.get(
           ? await bookingsCollection
               .find({
                 facilityId: {
-                  $in: facilityIds,
+                  $in:
+                    facilityIds,
                 },
               })
               .toArray()
@@ -1150,9 +1240,9 @@ app.get(
   },
 );
 
-// =======================
-// HEALTH CHECK
-// =======================
+/* =========================
+   HEALTH CHECK
+========================= */
 
 app.get("/", (req, res) => {
   res.send(
@@ -1160,9 +1250,9 @@ app.get("/", (req, res) => {
   );
 });
 
-// =======================
-// START SERVER
-// =======================
+/* =========================
+   START SERVER
+========================= */
 
 const startServer = async () => {
   try {

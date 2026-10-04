@@ -37,19 +37,4 @@ export const auth = betterAuth({
   plugins: [
     bearer(),
   ],
-
-  advanced: {
-    useSecureCookies:
-      process.env.NODE_ENV === "production",
-
-    defaultCookieAttributes: {
-      httpOnly: true,
-      secure:
-        process.env.NODE_ENV === "production",
-      sameSite:
-        process.env.NODE_ENV === "production"
-          ? "none"
-          : "lax",
-    },
-  },
 });
