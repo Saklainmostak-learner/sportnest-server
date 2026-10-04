@@ -1,5 +1,6 @@
 import { betterAuth } from "better-auth";
 import { mongodbAdapter } from "better-auth/adapters/mongodb";
+import { bearer } from "better-auth/plugins";
 
 import {
   db,
@@ -33,12 +34,18 @@ export const auth = betterAuth({
     },
   },
 
+  plugins: [
+    bearer(),
+  ],
+
   advanced: {
-    useSecureCookies: process.env.NODE_ENV === "production",
+    useSecureCookies:
+      process.env.NODE_ENV === "production",
 
     defaultCookieAttributes: {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
+      secure:
+        process.env.NODE_ENV === "production",
       sameSite:
         process.env.NODE_ENV === "production"
           ? "none"
