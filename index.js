@@ -2,13 +2,17 @@ import "dotenv/config";
 
 import express from "express";
 import cors from "cors";
+import cookieParser from "cookie-parser";
+import jwt from "jsonwebtoken";
 import { ObjectId } from "mongodb";
+
 import {
   fromNodeHeaders,
   toNodeHandler,
 } from "better-auth/node";
 
 import { auth } from "./auth/auth.js";
+
 import {
   facilitiesCollection,
   bookingsCollection,
@@ -16,29 +20,40 @@ import {
 } from "./config/database.js";
 
 const app = express();
-const port = process.env.PORT || 5000;
 
-/* =========================
+const port =
+  process.env.PORT || 5000;
+
+/* =========================================
    ALLOWED ORIGINS
-========================= */
+========================================= */
 
 const allowedOrigins = [
   "http://localhost:5173",
+
   "https://sportnest-client-seven.vercel.app",
+
   "https://sportnest-client-git-main-saklainmostak-learners-projects.vercel.app",
 ];
 
-/* =========================
+/* =========================================
    CORS
-========================= */
+========================================= */
 
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
+      if (
+        !origin ||
+        allowedOrigins.includes(origin)
+      ) {
         callback(null, true);
       } else {
-        callback(new Error("CORS not allowed"));
+        callback(
+          new Error(
+            "CORS not allowed",
+          ),
+        );
       }
     },
 
@@ -50,68 +65,115 @@ app.use(
   }),
 );
 
-/* =========================
+/* =========================================
    BETTER AUTH
-========================= */
+========================================= */
 
-// Better Auth handler must be before express.json()
+// Better Auth অবশ্যই express.json() এর আগে থাকবে।
 app.all(
   "/api/auth/*splat",
   toNodeHandler(auth),
 );
 
 app.use(express.json());
+app.use(cookieParser());
 
-/* =========================
-   AUTH MIDDLEWARE
-========================= */
+/* =========================================
+   JWT / AUTH MIDDLEWARE
+========================================= */
 
 const verifyToken = async (
   req,
   res,
   next,
 ) => {
+  /*
+    1. আগে আমাদের নিজের JWT HTTPOnly cookie check করবে।
+  */
+
+  const cookieToken =
+    req.cookies?.token;
+
+  if (cookieToken) {
+    try {
+      const decoded =
+        jwt.verify(
+          cookieToken,
+          process.env.JWT_SECRET,
+        );
+
+      req.user = decoded;
+
+      return next();
+    } catch (error) {
+      console.error(
+        "JWT cookie verification failed:",
+        error.message,
+      );
+    }
+  }
+
+  /*
+    2. JWT cookie unavailable হলে Better Auth Bearer
+       session fallback হিসেবে check করবে।
+  */
+
   try {
     const session =
       await auth.api.getSession({
-        headers: fromNodeHeaders(
-          req.headers,
-        ),
+        headers:
+          fromNodeHeaders(
+            req.headers,
+          ),
       });
 
     if (!session?.user) {
-      return res.status(401).send({
-        message: "Unauthorized access",
-      });
+      return res
+        .status(401)
+        .send({
+          message:
+            "Unauthorized access",
+        });
     }
 
     req.user = {
-      id: session.user.id,
-      email: session.user.email,
+      id:
+        session.user.id,
+
+      email:
+        session.user.email,
     };
 
     next();
   } catch (error) {
     console.error(
-      "Auth verification error:",
+      "Authentication error:",
       error,
     );
 
-    return res.status(401).send({
-      message: "Unauthorized access",
-    });
+    return res
+      .status(401)
+      .send({
+        message:
+          "Unauthorized access",
+      });
   }
 };
 
-/* =========================
+/* =========================================
    HELPERS
-========================= */
+========================================= */
 
-const isValidObjectId = (id) =>
-  ObjectId.isValid(id);
+const isValidObjectId = (
+  id,
+) => ObjectId.isValid(id);
 
-const normalizeSlots = (slots) => {
-  if (Array.isArray(slots)) {
+const normalizeSlots = (
+  slots,
+) => {
+  if (
+    Array.isArray(slots)
+  ) {
     return slots
       .map((slot) =>
         String(slot).trim(),
@@ -119,7 +181,9 @@ const normalizeSlots = (slots) => {
       .filter(Boolean);
   }
 
-  if (typeof slots === "string") {
+  if (
+    typeof slots === "string"
+  ) {
     return slots
       .split(",")
       .map((slot) =>
@@ -134,16 +198,19 @@ const normalizeSlots = (slots) => {
 const normalizeFacilityDocument = (
   facility,
 ) => {
-  if (!facility) return facility;
+  if (!facility) {
+    return facility;
+  }
 
   return {
     ...facility,
 
-    pricePerHour: Number(
-      facility.pricePerHour ??
-        facility.price ??
-        0,
-    ),
+    pricePerHour:
+      Number(
+        facility.pricePerHour ??
+          facility.price ??
+          0,
+      ),
 
     availableSlots:
       Array.isArray(
@@ -156,31 +223,153 @@ const normalizeFacilityDocument = (
   };
 };
 
-/* =========================
-   LOGOUT HELPER
-========================= */
+/* =========================================
+   CREATE JWT
+========================================= */
 
-app.post("/logout", (req, res) => {
-  res.send({
-    success: true,
-  });
-});
+app.post(
+  "/jwt",
+  async (req, res) => {
+    try {
+      /*
+        Login.jsx Better Auth bearer token
+        Authorization header-এ পাঠাবে।
+      */
 
-/* =========================
+      const session =
+        await auth.api.getSession({
+          headers:
+            fromNodeHeaders(
+              req.headers,
+            ),
+        });
+
+      if (!session?.user) {
+        return res
+          .status(401)
+          .send({
+            message:
+              "Unauthorized access",
+          });
+      }
+
+      const token =
+        jwt.sign(
+          {
+            id:
+              session.user.id,
+
+            email:
+              session.user.email,
+          },
+
+          process.env.JWT_SECRET,
+
+          {
+            expiresIn: "7d",
+          },
+        );
+
+      res
+        .cookie(
+          "token",
+          token,
+          {
+            httpOnly: true,
+
+            secure:
+              process.env
+                .NODE_ENV ===
+              "production",
+
+            sameSite:
+              process.env
+                .NODE_ENV ===
+              "production"
+                ? "none"
+                : "lax",
+
+            maxAge:
+              7 *
+              24 *
+              60 *
+              60 *
+              1000,
+          },
+        )
+        .send({
+          success: true,
+        });
+    } catch (error) {
+      console.error(
+        "JWT creation error:",
+        error,
+      );
+
+      res
+        .status(500)
+        .send({
+          message:
+            "Failed to create access token",
+
+          error:
+            error.message,
+        });
+    }
+  },
+);
+
+/* =========================================
+   LOGOUT
+========================================= */
+
+app.post(
+  "/logout",
+  (req, res) => {
+    res
+      .clearCookie(
+        "token",
+        {
+          httpOnly: true,
+
+          secure:
+            process.env
+              .NODE_ENV ===
+            "production",
+
+          sameSite:
+            process.env
+              .NODE_ENV ===
+            "production"
+              ? "none"
+              : "lax",
+        },
+      )
+      .send({
+        success: true,
+      });
+  },
+);
+
+/* =========================================
    GET ALL FACILITIES
-========================= */
+========================================= */
 
 app.get(
   "/facilities",
   async (req, res) => {
     try {
-      const search = String(
-        req.query.search || "",
-      ).trim();
+      const search =
+        String(
+          req.query.search ||
+            "",
+        ).trim();
 
-      const type = String(
-        req.query.type || "",
-      ).trim();
+      const type =
+        String(
+          req.query.type ||
+            "",
+        ).trim();
 
       const query = {};
 
@@ -195,14 +384,17 @@ app.get(
         type &&
         type !== "All Sports"
       ) {
-        const types = type
-          .split(",")
-          .map((item) =>
-            item.trim(),
-          )
-          .filter(Boolean);
+        const types =
+          type
+            .split(",")
+            .map((item) =>
+              item.trim(),
+            )
+            .filter(Boolean);
 
-        if (types.length > 0) {
+        if (
+          types.length > 0
+        ) {
           query.type = {
             $in: types,
           };
@@ -225,18 +417,22 @@ app.get(
         error,
       );
 
-      res.status(500).send({
-        message:
-          "Failed to load facilities",
-        error: error.message,
-      });
+      res
+        .status(500)
+        .send({
+          message:
+            "Failed to load facilities",
+
+          error:
+            error.message,
+        });
     }
   },
 );
 
-/* =========================
+/* =========================================
    GET SINGLE FACILITY
-========================= */
+========================================= */
 
 app.get(
   "/facilities/:id",
@@ -247,26 +443,31 @@ app.get(
           req.params.id,
         )
       ) {
-        return res.status(400).send({
-          message:
-            "Invalid facility id",
-        });
+        return res
+          .status(400)
+          .send({
+            message:
+              "Invalid facility id",
+          });
       }
 
       const facility =
         await facilitiesCollection.findOne(
           {
-            _id: new ObjectId(
-              req.params.id,
-            ),
+            _id:
+              new ObjectId(
+                req.params.id,
+              ),
           },
         );
 
       if (!facility) {
-        return res.status(404).send({
-          message:
-            "Facility not found",
-        });
+        return res
+          .status(404)
+          .send({
+            message:
+              "Facility not found",
+          });
       }
 
       res.send(
@@ -280,18 +481,22 @@ app.get(
         error,
       );
 
-      res.status(500).send({
-        message:
-          "Failed to load facility",
-        error: error.message,
-      });
+      res
+        .status(500)
+        .send({
+          message:
+            "Failed to load facility",
+
+          error:
+            error.message,
+        });
     }
   },
 );
 
-/* =========================
+/* =========================================
    ADD FACILITY
-========================= */
+========================================= */
 
 app.post(
   "/facilities",
@@ -315,10 +520,14 @@ app.post(
         );
 
       const numericPrice =
-        Number(pricePerHour);
+        Number(
+          pricePerHour,
+        );
 
       const numericCapacity =
-        Number(capacity);
+        Number(
+          capacity,
+        );
 
       if (
         !name?.trim() ||
@@ -375,9 +584,14 @@ app.post(
       }
 
       const facility = {
-        name: name.trim(),
+        name:
+          name.trim(),
+
         type,
-        image: image.trim(),
+
+        image:
+          image.trim(),
+
         location:
           location.trim(),
 
@@ -410,33 +624,39 @@ app.post(
           facility,
         );
 
-      res.status(201).send({
-        success: true,
+      res
+        .status(201)
+        .send({
+          success: true,
 
-        message:
-          "Facility added successfully",
+          message:
+            "Facility added successfully",
 
-        insertedId:
-          result.insertedId,
-      });
+          insertedId:
+            result.insertedId,
+        });
     } catch (error) {
       console.error(
         "Add facility error:",
         error,
       );
 
-      res.status(500).send({
-        message:
-          "Failed to add facility",
-        error: error.message,
-      });
+      res
+        .status(500)
+        .send({
+          message:
+            "Failed to add facility",
+
+          error:
+            error.message,
+        });
     }
   },
 );
 
-/* =========================
+/* =========================================
    MY FACILITIES
-========================= */
+========================================= */
 
 app.get(
   "/my-facilities",
@@ -465,18 +685,22 @@ app.get(
         error,
       );
 
-      res.status(500).send({
-        message:
-          "Failed to load your facilities",
-        error: error.message,
-      });
+      res
+        .status(500)
+        .send({
+          message:
+            "Failed to load your facilities",
+
+          error:
+            error.message,
+        });
     }
   },
 );
 
-/* =========================
+/* =========================================
    UPDATE FACILITY
-========================= */
+========================================= */
 
 app.patch(
   "/facilities/:id",
@@ -538,19 +762,22 @@ app.patch(
       } = req.body;
 
       const updatedFacility = {
-        name: String(
-          name || "",
-        ).trim(),
+        name:
+          String(
+            name || "",
+          ).trim(),
 
         type,
 
-        image: String(
-          image || "",
-        ).trim(),
+        image:
+          String(
+            image || "",
+          ).trim(),
 
-        location: String(
-          location || "",
-        ).trim(),
+        location:
+          String(
+            location || "",
+          ).trim(),
 
         pricePerHour:
           Number(
@@ -558,16 +785,20 @@ app.patch(
           ),
 
         capacity:
-          Number(capacity),
+          Number(
+            capacity,
+          ),
 
         availableSlots:
           normalizeSlots(
             availableSlots,
           ),
 
-        description: String(
-          description || "",
-        ).trim(),
+        description:
+          String(
+            description ||
+              "",
+          ).trim(),
 
         updatedAt:
           new Date(),
@@ -590,10 +821,11 @@ app.patch(
 
       if (
         !Number.isFinite(
-          updatedFacility.pricePerHour,
+          updatedFacility
+            .pricePerHour,
         ) ||
-        updatedFacility.pricePerHour <=
-          0
+        updatedFacility
+          .pricePerHour <= 0
       ) {
         return res
           .status(400)
@@ -605,10 +837,11 @@ app.patch(
 
       if (
         !Number.isFinite(
-          updatedFacility.capacity,
+          updatedFacility
+            .capacity,
         ) ||
-        updatedFacility.capacity <=
-          0
+        updatedFacility
+          .capacity <= 0
       ) {
         return res
           .status(400)
@@ -655,18 +888,22 @@ app.patch(
         error,
       );
 
-      res.status(500).send({
-        message:
-          "Failed to update facility",
-        error: error.message,
-      });
+      res
+        .status(500)
+        .send({
+          message:
+            "Failed to update facility",
+
+          error:
+            error.message,
+        });
     }
   },
 );
 
-/* =========================
+/* =========================================
    DELETE FACILITY
-========================= */
+========================================= */
 
 app.delete(
   "/facilities/:id",
@@ -737,18 +974,22 @@ app.delete(
         error,
       );
 
-      res.status(500).send({
-        message:
-          "Failed to delete facility",
-        error: error.message,
-      });
+      res
+        .status(500)
+        .send({
+          message:
+            "Failed to delete facility",
+
+          error:
+            error.message,
+        });
     }
   },
 );
 
-/* =========================
+/* =========================================
    GET BOOKINGS
-========================= */
+========================================= */
 
 app.get(
   "/bookings",
@@ -773,18 +1014,22 @@ app.get(
         error,
       );
 
-      res.status(500).send({
-        message:
-          "Failed to load bookings",
-        error: error.message,
-      });
+      res
+        .status(500)
+        .send({
+          message:
+            "Failed to load bookings",
+
+          error:
+            error.message,
+        });
     }
   },
 );
 
-/* =========================
+/* =========================================
    CREATE BOOKING
-========================= */
+========================================= */
 
 app.post(
   "/bookings",
@@ -858,9 +1103,11 @@ app.post(
 
       if (
         !timeSlot ||
-        !normalizedFacility.availableSlots.includes(
-          timeSlot,
-        )
+        !normalizedFacility
+          .availableSlots
+          .includes(
+            timeSlot,
+          )
       ) {
         return res
           .status(400)
@@ -895,10 +1142,11 @@ app.post(
 
       if (
         !Number.isFinite(
-          normalizedFacility.pricePerHour,
+          normalizedFacility
+            .pricePerHour,
         ) ||
-        normalizedFacility.pricePerHour <=
-          0
+        normalizedFacility
+          .pricePerHour <= 0
       ) {
         return res
           .status(400)
@@ -912,16 +1160,20 @@ app.post(
         await bookingsCollection.findOne(
           {
             facilityId:
-              normalizedFacility._id.toString(),
+              normalizedFacility
+                ._id
+                .toString(),
 
             userEmail:
               req.user.email,
 
             bookingDate,
+
             timeSlot,
 
             status: {
-              $ne: "cancelled",
+              $ne:
+                "cancelled",
             },
           },
         );
@@ -938,41 +1190,52 @@ app.post(
       }
 
       const totalPrice =
-        normalizedFacility.pricePerHour *
+        normalizedFacility
+          .pricePerHour *
         numericHours;
 
       const booking = {
         facilityId:
-          normalizedFacility._id.toString(),
+          normalizedFacility
+            ._id
+            .toString(),
 
         facilityName:
-          normalizedFacility.name,
+          normalizedFacility
+            .name,
 
         facilityType:
-          normalizedFacility.type,
+          normalizedFacility
+            .type,
 
         facilityImage:
-          normalizedFacility.image,
+          normalizedFacility
+            .image,
 
         location:
-          normalizedFacility.location,
+          normalizedFacility
+            .location,
 
         userEmail:
           req.user.email,
 
         bookingDate,
+
         timeSlot,
+
         bookingTime,
 
         hours:
           numericHours,
 
         pricePerHour:
-          normalizedFacility.pricePerHour,
+          normalizedFacility
+            .pricePerHour,
 
         totalPrice,
 
-        status: "pending",
+        status:
+          "pending",
 
         createdAt:
           new Date(),
@@ -986,42 +1249,51 @@ app.post(
       await facilitiesCollection.updateOne(
         {
           _id:
-            normalizedFacility._id,
+            normalizedFacility
+              ._id,
         },
         {
           $inc: {
-            bookingCount: 1,
+            bookingCount:
+              1,
           },
         },
       );
 
-      res.status(201).send({
-        success: true,
+      res
+        .status(201)
+        .send({
+          success:
+            true,
 
-        message:
-          "Booking created successfully",
+          message:
+            "Booking created successfully",
 
-        insertedId:
-          result.insertedId,
-      });
+          insertedId:
+            result.insertedId,
+        });
     } catch (error) {
       console.error(
         "Create booking error:",
         error,
       );
 
-      res.status(500).send({
-        message:
-          "Failed to create booking",
-        error: error.message,
-      });
+      res
+        .status(500)
+        .send({
+          message:
+            "Failed to create booking",
+
+          error:
+            error.message,
+        });
     }
   },
 );
 
-/* =========================
+/* =========================================
    CANCEL BOOKING
-========================= */
+========================================= */
 
 app.patch(
   "/bookings/:id/cancel",
@@ -1109,7 +1381,8 @@ app.patch(
           },
           {
             $inc: {
-              bookingCount: -1,
+              bookingCount:
+                -1,
             },
           },
         );
@@ -1127,18 +1400,22 @@ app.patch(
         error,
       );
 
-      res.status(500).send({
-        message:
-          "Failed to cancel booking",
-        error: error.message,
-      });
+      res
+        .status(500)
+        .send({
+          message:
+            "Failed to cancel booking",
+
+          error:
+            error.message,
+        });
     }
   },
 );
 
-/* =========================
+/* =========================================
    DASHBOARD STATS
-========================= */
+========================================= */
 
 app.get(
   "/dashboard-stats",
@@ -1171,7 +1448,8 @@ app.get(
           .toArray();
 
       const ownerBookings =
-        facilityIds.length > 0
+        facilityIds.length >
+        0
           ? await bookingsCollection
               .find({
                 facilityId: {
@@ -1190,7 +1468,10 @@ app.get(
               "cancelled",
           )
           .reduce(
-            (sum, booking) =>
+            (
+              sum,
+              booking,
+            ) =>
               sum +
               Number(
                 booking.totalPrice ||
@@ -1231,46 +1512,57 @@ app.get(
         error,
       );
 
-      res.status(500).send({
-        message:
-          "Failed to load dashboard statistics",
-        error: error.message,
-      });
+      res
+        .status(500)
+        .send({
+          message:
+            "Failed to load dashboard statistics",
+
+          error:
+            error.message,
+        });
     }
   },
 );
 
-/* =========================
+/* =========================================
    HEALTH CHECK
-========================= */
+========================================= */
 
-app.get("/", (req, res) => {
-  res.send(
-    "SportNest Server Running",
-  );
-});
-
-/* =========================
-   START SERVER
-========================= */
-
-const startServer = async () => {
-  try {
-    await connectToDatabase();
-
-    app.listen(port, () => {
-      console.log(
-        `SportNest running on port ${port}`,
-      );
-    });
-  } catch (error) {
-    console.error(
-      "Server failed to start:",
-      error.message,
+app.get(
+  "/",
+  (req, res) => {
+    res.send(
+      "SportNest Server Running",
     );
+  },
+);
 
-    process.exit(1);
-  }
-};
+/* =========================================
+   START SERVER
+========================================= */
+
+const startServer =
+  async () => {
+    try {
+      await connectToDatabase();
+
+      app.listen(
+        port,
+        () => {
+          console.log(
+            `SportNest running on port ${port}`,
+          );
+        },
+      );
+    } catch (error) {
+      console.error(
+        "Server failed to start:",
+        error.message,
+      );
+
+      process.exit(1);
+    }
+  };
 
 startServer();
